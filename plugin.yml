@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: LicenseRef-KoalaFix-Feeders
+# Copyright 2026 KoalaFix PTY LTD and the Kalibrate contributors
+#
+# The KoalaFix feeders as one Buildkite plugin: hooks/post-command runs one feeder bin from @koalafix/feeders after
+# the step's command, the Buildkite twin of the GitHub Action in ../action. Defaults live in the hook, because the
+# agent does not apply a schema's defaults; tests/buildkite.test.ts keeps both in step with the Action.
+name: KoalaFix feeder
+description: Write a fact to KoalaFix memory from a Buildkite step. The release of a tag, the version npm or PyPI serves as latest, an HTTP probe, or the digest an image tag points to.
+author: https://koalafix.com
+requirements:
+  - node
+  - npx
+configuration:
+  properties:
+    feeder:
+      type: string
+      enum: [buildkite-release, npm-version, pypi-version, http-probe, image-tag]
+      description: Which feeder runs.
+    token-secret:
+      type: string
+      default: KOALAFIX_FEEDER_TOKEN
+      description: The name of the Buildkite secret that holds the feeder token. Used unless token-env is set.
+    token-env:
+      type: string
+      description: The name of an environment variable that holds the feeder token, for a token set by an agent environment hook.
+    server-url:
+      type: string
+      default: https://mcp.koalafix.com
+      description: The KoalaFix server's address.
+    space:
+      type: string
+      description: The space the key belongs to.
+    key:
+      type: string
+      description: The key to write, lower-case subject.fact, for example web.widgets.version.
+    package:
+      type: string
+      description: npm-version and pypi-version only. The npm package or PyPI project whose latest version is written.
+    url:
+      type: string
+      description: http-probe only. The address the probe requests with GET.
+    expect-status:
+      type: [string, integer]
+      default: "200"
+      description: http-probe only. The status that counts as up.
+    expect-body:
+      type: string
+      description: http-probe only. A regular expression the first 1 MiB of the body must match to count as up.
+    interval:
+      type: [string, integer]
+      default: "60"
+      description: http-probe only. Seconds between runs; runs inside one interval are one event. Match the schedule.
+    image:
+      type: string
+      description: image-tag only. The image tag whose digest is written, registry/name:tag, for example ghcr.io/owner/app:v1.4.0.
+    registry-username:
+      type: string
+      description: image-tag only. The registry user, for a private image.
+    registry-password-secret:
+      type: string
+      default: REGISTRY_PASSWORD
+      description: image-tag only. The name of the Buildkite secret that holds the registry password or token, for a private image.
+  required: [feeder, space, key]
+  additionalProperties: false

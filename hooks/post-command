@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: LicenseRef-KoalaFix-Feeders
+# Copyright 2026 KoalaFix PTY LTD and the Kalibrate contributors
+#
+# Runs one KoalaFix feeder after the step's command. The token is read into a shell variable, handed to the feeder's
+# process alone, and never printed. Exit codes are the feeder's: 2 here means an option is missing or wrong and
+# nothing was sent.
+set -euo pipefail
+
+# The @koalafix/feeders version this plugin version runs. tests/buildkite.test.ts keeps it equal to the package's.
+FEEDERS="@koalafix/feeders@1.0.0"
+
+# An option's value, or its default when the step did not set it. Buildkite names the variable after the plugin's
+# repository (koalafix-buildkite-plugin) and the option, upper-cased, hyphens as underscores.
+option() {
+  local name
+  name=$(printf 'BUILDKITE_PLUGIN_KOALAFIX_%s' "$1" | tr 'a-z-' 'A-Z_')
+  printf '%s' "${!name:-$2}"
+}
+
+usage() {
+  echo "koalafix: $*" >&2
+  exit 2
+}
+
+# A step whose command failed has nothing true to report.
+if [ "${BUILDKITE_COMMAND_EXIT_STATUS:-0}" != "0" ]; then
+  echo "koalafix: the step's command failed; nothing sent" >&2
+  exit 0
+fi
+
+feeder=$(option feeder "")
+space=$(option space "")
+key=$(option key "")
+[ -n "$space" ] || usage "missing option: space"
+[ -n "$key" ] || usage "missing option: key"
+command -v node >/dev/null 2>&1 || usage "node is not on this agent's PATH; the feeders need Node 22 or later"
+command -v npx >/dev/null 2>&1 || usage "npx is not on this agent's PATH"
+
+flags=("--key=$key")
+event=
+trap 'rm -f -- "$event"' EXIT
+case "$feeder" in
+  buildkite-release)
+    bin=kalibrate-feed-github-release
+    [ -n "${BUILDKITE_TAG:-}" ] || usage "buildkite-release runs only in a build for a tag"
+    # Buildkite has no release event, so the tag build is written as the release object the bin reads: the commit
+    # stands for the release id, so building the same tag again is a replay. A tag has no release time or prerelease
+    # flag: now stands for the first, a SemVer pre-release tag (v2.0.0-rc.1) for the second.
+    event=$(mktemp)
+    node -e '
+      const { BUILDKITE_TAG: tag, BUILDKITE_COMMIT: id, BUILDKITE_ORGANIZATION_SLUG: org, BUILDKITE_PIPELINE_SLUG: pipeline, BUILDKITE_BUILD_URL: url } = process.env;
+      const release = { id, tag_name: tag, html_url: url, prerelease: /^v?\d+\.\d+\.\d+-/i.test(tag), published_at: new Date().toISOString() };
+      console.log(JSON.stringify({ repository: { full_name: `${org}/${pipeline}` }, release }));
+    ' >"$event"
+    flags+=("--event=$event")
+    ;;
+  npm-version | pypi-version)
+    bin=kalibrate-feed-$feeder
+    package=$(option package "")
+    [ -n "$package" ] || usage "missing option: package for $feeder"
+    flags+=("--package=$package")
+    ;;
+  http-probe)
+    bin=kalibrate-feed-http-probe
+    url=$(option url "")
+    [ -n "$url" ] || usage "missing option: url"
+    # `--flag=value`, so a value that starts with a dash is never read as a flag.
+    flags+=("--url=$url" "--expect-status=$(option expect-status 200)" "--interval=$(option interval 60)")
+    body=$(option expect-body "")
+    [ -z "$body" ] || flags+=("--expect-body=$body")
+    ;;
+  image-tag)
+    bin=kalibrate-feed-image-tag
+    image=$(option image "")
+    [ -n "$image" ] || usage "missing option: image"
+    flags+=("--image=$image")
+    registry_username=$(option registry-username "")
+    if [ -n "$registry_username" ]; then
+      # The password is a Buildkite secret's name, like the token's: the pipeline file never holds the password itself.
+      registry_password=$(buildkite-agent secret get "$(option registry-password-secret REGISTRY_PASSWORD)" 2>/dev/null) || registry_password=""
+      [ -n "$registry_password" ] || usage "registry-username is set but the Buildkite secret named by registry-password-secret is empty"
+      flags+=("--username=$registry_username" "--password-env=KALIBRATE_REGISTRY_PASSWORD")
+    fi
+    ;;
+  *) usage "feeder must be one of buildkite-release, npm-version, pypi-version, http-probe, image-tag" ;;
+esac
+
+token_env=$(option token-env "")
+if [ -n "$token_env" ]; then
+  [[ "$token_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || usage "token-env is not an environment variable name"
+  token="${!token_env:-}"
+else
+  token=$(buildkite-agent secret get "$(option token-secret KOALAFIX_FEEDER_TOKEN)" 2>/dev/null) || token=""
+fi
+[ -n "$token" ] || usage "no feeder token: set the Buildkite secret named by token-secret, or the variable named by token-env"
+
+# A subshell, so the token and the settings exist only for the feeder's process, and the token never goes over plain
+# http to a remote host whatever the agent's environment says.
+(
+  export KALIBRATE_FEEDER_TOKEN="$token" KALIBRATE_URL="$(option server-url https://mcp.koalafix.com)" KALIBRATE_SPACE="$space"
+  unset KALIBRATE_ALLOW_INSECURE_HTTP
+  [ -z "${registry_password:-}" ] || export KALIBRATE_REGISTRY_PASSWORD="$registry_password"
+  npx --yes --package="$FEEDERS" -- "$bin" "${flags[@]}"
+)
