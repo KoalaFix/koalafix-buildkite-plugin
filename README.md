@@ -57,13 +57,16 @@ The ticket case: a build for a tag writes the tag as the release. The pipeline m
 the pipeline's GitHub settings). The `if` keeps the step off branch builds, where it would fail because there is no tag.
 Building the same tag again writes nothing new.
 
+Pin the plugin to the full commit SHA of a release, as below, not to a tag. A tag can be moved to different code, and a
+commit cannot; the SHA below is the commit of release `v1.0.0`.
+
 ```yaml
 steps:
   - label: ":rocket: release"
     command: ./scripts/release.sh
     if: build.tag != null
     plugins:
-      - koalafix/koalafix#v1.0.0:
+      - koalafix/koalafix#1278b889fcae55c26d5a3d9284158ca6caf7f42f:
           feeder: buildkite-release
           space: your-space
           key: release.latest
@@ -79,7 +82,7 @@ steps:
   - label: ":npm: publish"
     command: npm publish
     plugins:
-      - koalafix/koalafix#v1.0.0:
+      - koalafix/koalafix#1278b889fcae55c26d5a3d9284158ca6caf7f42f:
           feeder: npm-version
           space: your-space
           key: web.widgets.version
@@ -98,7 +101,7 @@ steps:
     agents:
       queue: internal
     plugins:
-      - koalafix/koalafix#v1.0.0:
+      - koalafix/koalafix#1278b889fcae55c26d5a3d9284158ca6caf7f42f:
           feeder: http-probe
           space: your-space
           key: billing.health
